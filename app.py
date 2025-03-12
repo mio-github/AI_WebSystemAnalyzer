@@ -180,8 +180,8 @@ def render_sidebar():
         
         # バージョン情報
         st.markdown("---")
-        st.caption("バージョン 1.0.0")
-        st.caption("© 2023 Web Auto Analyzer")
+        st.caption("バージョン 0.1.0008")
+        st.caption("© 2025 Mio System Co.,Ltd.")
 
 def main():
     """メイン実行関数"""
