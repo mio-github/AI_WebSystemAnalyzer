@@ -1,0 +1,41 @@
+# Web自動解析システム設定ファイル
+
+# ターゲットシステム設定
+target:
+  base_url: "https://www.en-system.net/"
+  login_url: "https://www.en-system.net/admin/"
+  credentials:
+    username: "hirano"
+    password: "hirano"
+    
+# クローラー設定
+crawler:
+  headless: true  # ヘッドレスモードで実行するか
+  screenshot: true  # スクリーンショットを取得するか
+  delay: 1.5  # ページロード待機時間（秒）
+  max_depth: 3  # クロール最大深度
+  exclude_patterns:  # 除外するURLパターン
+    - "/logout"
+    - "/api/"
+    - "/static/"
+  concurrency: 2  # 同時実行数
+
+# ストレージ設定
+storage:
+  base_dir: "./output"
+  html_dir: "html"
+  screenshots_dir: "screenshots"
+  docs_dir: "documents"
+  data_dir: "extracted_data"
+
+# LLM設定
+llm:
+  provider: "openai"  # LLMプロバイダー
+  model: "gpt-o3-mini"  # 使用するモデル
+  temperature: 0.1
+  max_tokens: 4000
+
+# ログ設定
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: "auto_analyze.log" 
