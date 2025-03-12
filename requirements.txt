@@ -18,4 +18,10 @@ langchain==0.0.335
 
 # データ処理
 pandas==2.1.3
-numpy==1.26.2 
+numpy==1.26.2
+
+# GUI関連
+streamlit==1.28.0
+plotly==5.18.0
+streamlit-option-menu==0.3.6
+watchdog==3.0.0 
