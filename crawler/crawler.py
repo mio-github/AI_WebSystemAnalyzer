@@ -252,59 +252,85 @@ class WebCrawler:
         
         return self.pages
     
-    def _process_page(self, url, depth):
+    def _process_page(self, url, depth=0):
         """
-        ページを処理
+        ページを処理する
         
         Args:
-            url: 処理するURL
-            depth: 現在の深さ
+            url (str): 処理するURL
+            depth (int): 現在のクロール深度
         """
-        if not self.running or url in self.visited_urls or depth > self.max_depth:
-            return
-        
-        # URLをクリーンアップ
-        url = self._normalize_url(url)
-        
-        # 除外パターンのチェック
-        if self._is_excluded(url):
-            self.logger.debug(f"除外URLのためスキップ: {url}")
-            return
-        
-        # 訪問済みURLに追加
-        self.visited_urls.add(url)
-        
         try:
-            # ページに移動
-            self.logger.info(f"処理中: {url} ({depth}/{self.max_depth})")
-            self.notify('page_visit', {'url': url, 'depth': depth, 'max_depth': self.max_depth})
+            # URLの正規化
+            url = self._normalize_url(url)
             
+            # すでに訪問済みの場合はスキップ
+            if url in self.visited_urls:
+                return
+            
+            # 訪問済みに追加
+            self.visited_urls.add(url)
+            
+            # ページ訪問を通知
+            self.notify('page_visit', {'url': url, 'depth': depth})
+            
+            # ページを開く
             self.browser.get(url)
-            time.sleep(1)  # ページ読み込み待機
             
-            # ページ情報
-            page_id = self._generate_page_id(url)
+            # ページ読み込み待機
+            WebDriverWait(self.browser, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            
+            # ページタイトルを取得
             title = self.browser.title
             
-            # スクリーンショットを撮影
-            screenshot_file = f"{page_id}.png"
-            screenshot_path = os.path.join(self.dirs['screenshots'], screenshot_file)
+            # ページIDを生成
+            page_id = get_url_hash(url)
+            
+            # スクリーンショットを保存
+            screenshot_path = None
             try:
+                screenshot_file = f"{page_id}.png"
+                screenshot_path = os.path.join(self.dirs['screenshots'], screenshot_file)
                 self.browser.save_screenshot(screenshot_path)
                 self.logger.debug(f"スクリーンショット保存: {screenshot_path}")
-                self.notify('screenshot', {'path': screenshot_path, 'url': url})
+                
+                # スクリーンショットのファイルサイズを確認して通知
+                if os.path.exists(screenshot_path):
+                    file_size = os.path.getsize(screenshot_path) / 1024  # KB単位
+                    self.notify('screenshot_save', {'path': screenshot_path, 'url': url, 'size': f"{file_size:.1f}KB"})
+                    self.logger.info(f"スクリーンショット保存成功: {screenshot_path} (サイズ: {file_size:.1f}KB)")
+                else:
+                    self.logger.error(f"スクリーンショットが保存されていません: {screenshot_path}")
+                    self.notify('error', {'message': f"スクリーンショットの保存に失敗しました: {screenshot_path}"})
             except Exception as e:
                 self.logger.error(f"スクリーンショット保存エラー: {str(e)}")
-                self.notify('error', {'message': f"スクリーンショットエラー: {str(e)}"})
+                self.notify('error', {'message': f"スクリーンショット保存エラー: {str(e)}"})
+            
+            # HTMLソースを取得
+            html_source = self.browser.page_source
+            
+            # HTMLソースの最初の1000文字をコンソールに出力
+            html_preview = html_source[:1000] + "..." if len(html_source) > 1000 else html_source
+            print(f"\n===== HTML SOURCE PREVIEW ({url}) =====\n{html_preview}\n==============================\n")
+            self.notify('html_content', {'url': url, 'preview': html_preview})
             
             # HTMLを保存
             html_file = f"{page_id}.html"
             html_path = os.path.join(self.dirs['html'], html_file)
             try:
                 with open(html_path, 'w', encoding='utf-8') as f:
-                    f.write(self.browser.page_source)
-                self.logger.debug(f"HTML保存: {html_path}")
-                self.notify('html_save', {'path': html_path, 'url': url})
+                    f.write(html_source)
+                
+                # HTMLファイルが実際に保存されたか確認
+                if os.path.exists(html_path):
+                    file_size = os.path.getsize(html_path) / 1024  # KB単位
+                    self.logger.info(f"HTML保存成功: {html_path} (サイズ: {file_size:.1f}KB)")
+                    self.notify('html_save', {'path': html_path, 'url': url, 'size': f"{file_size:.1f}KB"})
+                else:
+                    self.logger.error(f"HTMLファイルが保存されていません: {html_path}")
+                    self.notify('error', {'message': f"HTMLの保存に失敗しました: {html_path}"})
             except Exception as e:
                 self.logger.error(f"HTML保存エラー: {str(e)}")
                 self.notify('error', {'message': f"HTML保存エラー: {str(e)}"})

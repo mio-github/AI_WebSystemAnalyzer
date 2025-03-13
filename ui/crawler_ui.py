@@ -32,14 +32,14 @@ status_queue = queue.Queue()
 
 
 def process_thread_data():
-    """スレッドからのデータを処理"""
+    """スレッドからのデータを処理（キューからsession_stateへ）"""
     # ログキューの処理
     while not log_queue.empty():
         try:
-            log_message = log_queue.get_nowait()
+            log = log_queue.get_nowait()
             if 'crawler_log' not in st.session_state:
                 st.session_state.crawler_log = []
-            st.session_state.crawler_log.append(log_message)
+            st.session_state.crawler_log.append(log)
         except queue.Empty:
             break
     
@@ -55,14 +55,8 @@ def process_thread_data():
     while not status_queue.empty():
         try:
             status = status_queue.get_nowait()
-            if 'completed' in status:
-                st.session_state.crawler_complete = status['completed']
-            if 'running' in status:
-                st.session_state.crawler_running = status['running']
-            if 'output_dir' in status:
-                st.session_state.crawler_output_dir = status['output_dir']
-            if 'current_step' in status:
-                st.session_state.current_step = status['current_step']
+            for key, value in status.items():
+                st.session_state[key] = value
         except queue.Empty:
             break
 
@@ -353,36 +347,44 @@ def run_crawler_process():
                 add_log("クローリングを開始します...")
                 # WebCrawlerにファイル保存の詳細を表示するコールバックを追加
                 
-                def crawler_callback(event, data):
-                    """クローラーからのイベントを処理"""
-                    if event == 'page_visit':
+                def crawler_callback(event_name, data):
+                    """
+                    クローラーからのコールバックを処理
+                    
+                    Args:
+                        event_name (str): イベント名
+                        data (dict): イベントデータ
+                    """
+                    if event_name == 'page_visit':
                         url = data.get('url', '')
-                        title = data.get('title', '')
-                        add_log(f"ページ訪問: {title} ({url})")
-                    elif event == 'screenshot':
+                        depth = data.get('depth', 0)
+                        add_log(f"処理中: {url} ({depth+1}/{st.session_state.config.get('crawler', {}).get('max_depth', 3)})")
+                    elif event_name == 'screenshot_save':
+                        url = data.get('url', '')
                         path = data.get('path', '')
+                        size = data.get('size', '')
+                        add_log(f"スクリーンショット保存: {os.path.basename(path)} - {url} ({size})")
+                    elif event_name == 'html_save':
                         url = data.get('url', '')
-                        add_log(f"スクリーンショット保存: {path}")
-                        # ファイル存在確認
-                        if os.path.exists(path):
-                            file_size = os.path.getsize(path)
-                            add_log(f"  - ファイルサイズ: {file_size} bytes")
-                        else:
-                            add_log(f"  - ⚠️ ファイルが見つかりません")
-                    elif event == 'html_save':
                         path = data.get('path', '')
+                        size = data.get('size', '')
+                        add_log(f"HTML保存: {os.path.basename(path)} - {url} ({size})")
+                    elif event_name == 'html_content':
                         url = data.get('url', '')
-                        add_log(f"HTML保存: {path}")
-                        # ファイル存在確認
-                        if os.path.exists(path):
-                            file_size = os.path.getsize(path)
-                            add_log(f"  - ファイルサイズ: {file_size} bytes")
-                        else:
-                            add_log(f"  - ⚠️ ファイルが見つかりません")
-                    elif event == 'link_found':
+                        preview = data.get('preview', '')
+                        # HTMLプレビューを取得し、長すぎる場合は切り詰める
+                        preview_short = preview[:500] + "..." if len(preview) > 500 else preview
+                        add_log(f"HTMLプレビュー ({url}):")
+                        add_log(f"```\n{preview_short}\n```")
+                    elif event_name == 'error':
+                        message = data.get('message', '')
+                        add_log(f"エラー: {message}")
+                    elif event_name == 'link_found':
                         url = data.get('url', '')
                         text = data.get('text', '')
-                        add_log(f"リンク検出: {text} ({url})")
+                        # リンク発見はログが多くなりすぎるので詳細モードでのみ表示
+                        if st.session_state.config.get('debug', False):
+                            add_log(f"リンク発見: {text} -> {url}")
                 
                 crawler = WebCrawler(browser, config, dirs)
                 # クローラーに進捗コールバックを設定
