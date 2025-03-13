@@ -8,6 +8,7 @@ Web自動解析システム - Webクローリング機能
 import os
 import re
 import time
+import json
 import logging
 import urllib.parse
 from selenium.webdriver.common.by import By
@@ -17,6 +18,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from utils.helpers import normalize_url, get_url_hash, get_safe_filename
 from crawler.screenshot import ScreenshotTaker
 from crawler.storage import PageStorage
+from utils.logger import setup_logger
 from datetime import datetime
 
 
@@ -237,6 +239,11 @@ class WebCrawler:
         self.logger.info(f"クローリングを開始します: {start_url}")
         self.notify('start_crawl', {'url': start_url})
         
+        # 実行状態を初期化
+        self.running = True
+        self.visited_urls = set()
+        self.pages = []
+        
         # 初期ページを処理
         try:
             self._process_page(start_url, 1)
@@ -260,6 +267,11 @@ class WebCrawler:
             url (str): 処理するURL
             depth (int): 現在のクロール深度
         """
+        # 実行中でない場合は処理を中止
+        if not self.running:
+            self.logger.info("クローリングが中止されました")
+            return
+        
         try:
             # URLの正規化
             url = self._normalize_url(url)

@@ -189,7 +189,11 @@ def render_crawler_page():
             if stop_button:
                 log_queue.put("ユーザーによりクローリングが中止されました。")
                 status_queue.put({'running': False, 'completed': False})
+                # UI状態更新 (即時反映)
+                st.session_state.crawler_running = False
+                st.session_state.crawler_complete = False
                 # スレッドは停止できないため、フラグで処理中断を知らせる
+                st.rerun()
     
     # 実行状態と進捗状況
     if st.session_state.crawler_running or st.session_state.crawler_complete:
@@ -271,6 +275,9 @@ def update_status(**kwargs):
         **kwargs: キーと値のペア
     """
     status_queue.put(kwargs)
+    
+    # 重要なステータス変更はコンソールにも出力
+    print(f"STATUS UPDATE: {kwargs}")
 
 
 def run_crawler_process():
@@ -343,7 +350,7 @@ def run_crawler_process():
                 update_progress(0.2, "ログイン完了")
             
             # ステップ2: クローリング
-            if hasattr(st.session_state, 'run_crawling') and st.session_state.run_crawling and browser:
+            if hasattr(st.session_state, 'run_crawling') and st.session_state.run_crawling and browser and st.session_state.crawler_running:
                 add_log("クローリングを開始します...")
                 # WebCrawlerにファイル保存の詳細を表示するコールバックを追加
                 
@@ -355,6 +362,10 @@ def run_crawler_process():
                         event_name (str): イベント名
                         data (dict): イベントデータ
                     """
+                    if not st.session_state.crawler_running:
+                        # 中止フラグが立っていたら処理をスキップ
+                        return
+                        
                     if event_name == 'page_visit':
                         url = data.get('url', '')
                         depth = data.get('depth', 0)
@@ -388,7 +399,7 @@ def run_crawler_process():
                 
                 crawler = WebCrawler(browser, config, dirs)
                 # クローラーに進捗コールバックを設定
-                crawler.set_callback = crawler_callback
+                crawler.set_callback(crawler_callback)  # 正しい関数呼び出し
                 update_progress(0.25, "クローリング準備中...")
                 
                 # クローリングの直前に空の出力フォルダをチェック
@@ -397,7 +408,9 @@ def run_crawler_process():
                     files = os.listdir(dir_path) if os.path.exists(dir_path) else []
                     add_log(f"  - {dir_name}: {len(files)}ファイル")
                 
-                pages = crawler.crawl()
+                # クローリング開始
+                if st.session_state.crawler_running:  # 中止ボタンが押されてないか再確認
+                    pages = crawler.crawl()
                 
                 # クローリング後の出力フォルダをチェック
                 add_log("クローリング後の出力ディレクトリを確認:")
@@ -408,9 +421,28 @@ def run_crawler_process():
                         # サンプルとして最大5つのファイルを表示
                         file_samples = files[:5]
                         add_log(f"    サンプルファイル: {', '.join(file_samples)}")
+                        
+                        # ファイルサイズも確認
+                        for sample in file_samples:
+                            file_path = os.path.join(dir_path, sample)
+                            if os.path.exists(file_path):
+                                file_size = os.path.getsize(file_path) / 1024  # KB単位
+                                add_log(f"      - {sample}: {file_size:.1f}KB")
+                            else:
+                                add_log(f"      - {sample}: ファイルが見つかりません")
+                    elif dir_name in ['html', 'screenshots'] and len(files) == 0:
+                        add_log(f"  警告: {dir_name}ディレクトリにファイルが保存されていません！")
                 
-                add_log(f"クローリングが完了しました。合計{len(pages)}ページを取得しました")
-                update_progress(0.5, f"クローリング完了（{len(pages)}ページ）")
+                # クロール中に中止ボタンが押された場合
+                if not st.session_state.crawler_running:
+                    add_log("クローリングは中断されました")
+                    update_progress(0.0, "中断しました")
+                    # 完了処理
+                    update_status(completed=False, running=False)
+                    return
+                
+                add_log(f"クローリングが完了しました。合計{len(pages) if pages else 0}ページを取得しました")
+                update_progress(0.5, f"クローリング完了（{len(pages) if pages else 0}ページ）")
             
             # ステップ3: HTML解析
             if hasattr(st.session_state, 'run_analysis') and st.session_state.run_analysis and pages:
@@ -511,4 +543,7 @@ def run_crawler_process():
     
     finally:
         # 完了フラグを設定
-        update_status(completed=True, running=False) 
+        update_status(completed=True, running=False)
+        # UIの状態を更新
+        st.session_state.crawler_running = False
+        st.session_state.crawler_complete = True 
