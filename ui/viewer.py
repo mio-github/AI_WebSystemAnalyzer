@@ -21,7 +21,7 @@ def render_viewer_page():
         st.warning("クローリング結果が見つかりません。先にクローラーを実行してください。")
         if st.button("クローラー実行画面へ", use_container_width=True):
             st.session_state.current_page = "crawler"
-            st.experimental_rerun()
+            st.rerun()
         return
     
     # 選択されたディレクトリのパスを取得
