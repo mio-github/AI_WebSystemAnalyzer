@@ -17,40 +17,53 @@ from selenium.webdriver.support import expected_conditions as EC
 from utils.helpers import normalize_url, get_url_hash, get_safe_filename
 from crawler.screenshot import ScreenshotTaker
 from crawler.storage import PageStorage
+from datetime import datetime
 
 
 class WebCrawler:
-    """Webクローリングを行うクラス"""
+    """
+    Webクローラークラス
+    指定されたURLからリンクをたどり、HTMLとスクリーンショットを保存する
+    """
     
     def __init__(self, browser, config, dirs):
         """
-        初期化メソッド
-        
+        初期化
+
         Args:
-            browser: Seleniumブラウザインスタンス
-            config (dict): アプリケーション設定
-            dirs (dict): 出力ディレクトリ情報
+            browser: Seleniumのブラウザインスタンス
+            config: 設定情報
+            dirs: 出力ディレクトリ情報
         """
         self.browser = browser
         self.config = config
         self.dirs = dirs
-        self.logger = logging.getLogger(__name__)
+        self.visited_urls = set()
+        self.pages = []
+        
+        # ロガー設定
+        self.logger = setup_logger('crawler')
+        
+        # クローリング設定
+        crawler_config = config.get('crawler', {})
+        self.max_depth = crawler_config.get('max_depth', 3)
+        self.include_patterns = crawler_config.get('include_patterns', ['.*'])
+        self.exclude_patterns = crawler_config.get('exclude_patterns', [])
+        
+        # 状態管理
+        self.running = True
+        
+        # コールバック関数（通知用）
+        self.callback = None
         
         # 訪問済みURLの追跡
-        self.visited_urls = set()
         self.to_visit_urls = []
         
         # ベースURL設定
         self.base_url = config['target']['base_url']
         
-        # 除外パターン設定
-        self.exclude_patterns = config['crawler'].get('exclude_patterns', [])
-        
         # ページ読み込み待機時間
         self.delay = config['crawler'].get('delay', 1.5)
-        
-        # 最大クロール深度
-        self.max_depth = config['crawler'].get('max_depth', 3)
         
         # スクリーンショット設定
         self.take_screenshots = config['crawler'].get('screenshot', True)
@@ -58,9 +71,26 @@ class WebCrawler:
         # ヘルパークラス
         self.screenshot_taker = ScreenshotTaker(browser, dirs)
         self.page_storage = PageStorage(dirs)
+    
+    def set_callback(self, callback_function):
+        """
+        コールバック関数を設定
         
-        # クロール結果保存用
-        self.pages = []
+        Args:
+            callback_function: イベントとデータを受け取るコールバック関数
+        """
+        self.callback = callback_function
+    
+    def notify(self, event, data):
+        """
+        イベント通知
+        
+        Args:
+            event: イベント名
+            data: イベントデータ
+        """
+        if self.callback:
+            self.callback(event, data)
     
     def should_visit(self, url):
         """
@@ -194,29 +224,192 @@ class WebCrawler:
     
     def crawl(self):
         """
-        Webサイトのクローリングを開始する
+        クローリングを実行
         
         Returns:
-            list: 処理したページ情報のリスト
+            list: 訪問したページ情報のリスト
         """
-        self.logger.info("クローリングを開始します")
+        start_url = self.config.get('target', {}).get('url', '')
+        if not start_url:
+            self.logger.error("開始URLが設定されていません")
+            return []
         
-        # 最初のURLを追加
-        start_url = self.browser.current_url
-        self.to_visit_urls.append((start_url, 0))
+        self.logger.info(f"クローリングを開始します: {start_url}")
+        self.notify('start_crawl', {'url': start_url})
         
-        # クロール処理
-        while self.to_visit_urls:
-            # キューからURLを取得
-            url, depth = self.to_visit_urls.pop(0)
+        # 初期ページを処理
+        try:
+            self._process_page(start_url, 1)
+        except Exception as e:
+            self.logger.error(f"クローリング中にエラーが発生しました: {str(e)}")
+            self.notify('error', {'message': str(e)})
+        
+        self.logger.info(f"クローリングが完了しました: {len(self.pages)}ページを処理しました")
+        self.notify('finish_crawl', {'page_count': len(self.pages)})
+        
+        # 結果をJSONファイルに保存
+        self._save_results()
+        
+        return self.pages
+    
+    def _process_page(self, url, depth):
+        """
+        ページを処理
+        
+        Args:
+            url: 処理するURL
+            depth: 現在の深さ
+        """
+        if not self.running or url in self.visited_urls or depth > self.max_depth:
+            return
+        
+        # URLをクリーンアップ
+        url = self._normalize_url(url)
+        
+        # 除外パターンのチェック
+        if self._is_excluded(url):
+            self.logger.debug(f"除外URLのためスキップ: {url}")
+            return
+        
+        # 訪問済みURLに追加
+        self.visited_urls.add(url)
+        
+        try:
+            # ページに移動
+            self.logger.info(f"処理中: {url} ({depth}/{self.max_depth})")
+            self.notify('page_visit', {'url': url, 'depth': depth, 'max_depth': self.max_depth})
             
-            # 再チェック（他のパスから追加された可能性がある）
-            if normalize_url(url) in self.visited_urls:
-                continue
-                
-            # ページ処理
-            self.process_page(url, depth)
+            self.browser.get(url)
+            time.sleep(1)  # ページ読み込み待機
+            
+            # ページ情報
+            page_id = self._generate_page_id(url)
+            title = self.browser.title
+            
+            # スクリーンショットを撮影
+            screenshot_file = f"{page_id}.png"
+            screenshot_path = os.path.join(self.dirs['screenshots'], screenshot_file)
+            try:
+                self.browser.save_screenshot(screenshot_path)
+                self.logger.debug(f"スクリーンショット保存: {screenshot_path}")
+                self.notify('screenshot', {'path': screenshot_path, 'url': url})
+            except Exception as e:
+                self.logger.error(f"スクリーンショット保存エラー: {str(e)}")
+                self.notify('error', {'message': f"スクリーンショットエラー: {str(e)}"})
+            
+            # HTMLを保存
+            html_file = f"{page_id}.html"
+            html_path = os.path.join(self.dirs['html'], html_file)
+            try:
+                with open(html_path, 'w', encoding='utf-8') as f:
+                    f.write(self.browser.page_source)
+                self.logger.debug(f"HTML保存: {html_path}")
+                self.notify('html_save', {'path': html_path, 'url': url})
+            except Exception as e:
+                self.logger.error(f"HTML保存エラー: {str(e)}")
+                self.notify('error', {'message': f"HTML保存エラー: {str(e)}"})
+            
+            # ページ情報を記録
+            page_info = {
+                'id': page_id,
+                'url': url,
+                'title': title,
+                'depth': depth,
+                'screenshot_path': screenshot_path,
+                'html_path': html_path,
+                'timestamp': datetime.now().isoformat()
+            }
+            self.pages.append(page_info)
+            
+            # 次の深さが最大深さを超えている場合は終了
+            if depth >= self.max_depth:
+                return
+            
+            # リンクを収集して次のページへ
+            links = self._extract_links()
+            
+            # リンク情報を通知
+            for link in links:
+                self.notify('link_found', {'url': link['url'], 'text': link['text']})
+            
+            for link in links:
+                next_url = link['url']
+                if next_url not in self.visited_urls:
+                    self._process_page(next_url, depth + 1)
+                    
+        except Exception as e:
+            self.logger.error(f"ページ処理中にエラーが発生しました ({url}): {str(e)}")
+            self.notify('error', {'url': url, 'message': str(e)})
+    
+    def _normalize_url(self, url):
+        """
+        URLを正規化する
         
-        self.logger.info(f"クローリングが完了しました。合計{len(self.pages)}ページを処理しました。")
+        Args:
+            url (str): 正規化するURL
+            
+        Returns:
+            str: 正規化されたURL
+        """
+        return normalize_url(url)
+    
+    def _is_excluded(self, url):
+        """
+        URLが除外パターンに一致するかどうかを判断する
         
-        return self.pages 
+        Args:
+            url (str): チェックするURL
+            
+        Returns:
+            bool: URLが除外パターンに一致するかどうか
+        """
+        for pattern in self.exclude_patterns:
+            if re.search(pattern, url):
+                return True
+        return False
+    
+    def _generate_page_id(self, url):
+        """
+        URLからページIDを生成する
+        
+        Args:
+            url (str): ページIDを生成するためのURL
+            
+        Returns:
+            str: 生成されたページID
+        """
+        return get_url_hash(url)
+    
+    def _extract_links(self):
+        """
+        現在のページから全てのリンクを抽出する
+        
+        Returns:
+            list: 抽出されたリンクのリスト
+        """
+        links = []
+        
+        try:
+            # ページ内の全リンクを取得
+            elements = self.browser.find_elements(By.TAG_NAME, "a")
+            
+            # href属性を取得
+            for element in elements:
+                href = element.get_attribute("href")
+                if href and href.startswith("http"):
+                    links.append(href)
+        
+        except Exception as e:
+            self.logger.error(f"リンク抽出中にエラーが発生しました: {e}")
+        
+        return links
+    
+    def _save_results(self):
+        """
+        クローリング結果をJSONファイルに保存する
+        """
+        # 結果をJSONファイルに保存
+        json_path = os.path.join(self.dirs['results'], 'crawl_results.json')
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(self.pages, f)
+        self.logger.info(f"クローリング結果をJSONファイルに保存しました: {json_path}") 

@@ -13,6 +13,7 @@ import threading
 import pandas as pd
 import streamlit as st
 from datetime import datetime
+from selenium import webdriver
 
 # 内部モジュールのインポート
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,7 +31,7 @@ def render_data_extractor_page():
         st.warning("クローリング結果が見つかりません。先にクローラーを実行してください。")
         if st.button("クローラー実行画面へ", use_container_width=True):
             st.session_state.current_page = "crawler"
-            st.experimental_rerun()
+            st.rerun()
         return
     
     # 実行状態の初期化
@@ -86,8 +87,8 @@ def render_data_source_detection(structure_file, output_dir, data_dir):
                 st.warning("データソースが検出されませんでした")
             else:
                 st.success(f"{len(st.session_state.data_sources)}個のデータソースが見つかりました")
-                # ページをリロード
-                st.experimental_rerun()
+                # ページを再読み込み
+                st.rerun()
         else:
             st.error("構造データファイルが見つかりません")
             return
@@ -198,8 +199,8 @@ def render_data_source_detection(structure_file, output_dir, data_dir):
                     thread.daemon = True
                     thread.start()
                     
-                    # ページを更新
-                    st.experimental_rerun()
+                    # ページを再読み込み
+                    st.rerun()
         
         with col2:
             if st.session_state.extraction_running:
@@ -218,11 +219,22 @@ def render_data_source_detection(structure_file, output_dir, data_dir):
         # 実行状態と進捗状況
         if st.session_state.extraction_running or st.session_state.extraction_complete:
             # プログレスバー
-            st.progress(st.session_state.extraction_progress)
+            progress_value = st.session_state.extraction_progress
+            st.progress(progress_value)
+            
+            # 進捗パーセンテージと現在のステップ表示
+            if 'extraction_current_step' not in st.session_state:
+                st.session_state.extraction_current_step = ""
+            
+            progress_col1, progress_col2 = st.columns([1, 3])
+            with progress_col1:
+                st.markdown(f"**進捗率:** {int(progress_value * 100)}%")
+            with progress_col2:
+                st.markdown(f"**現在の処理:** {st.session_state.extraction_current_step}")
             
             # ログ表示
             st.markdown('<h3 class="sub-header">実行ログ</h3>', unsafe_allow_html=True)
-            log_container = st.container(height=200)
+            log_container = st.container()
             with log_container:
                 for log in st.session_state.extraction_log:
                     st.text(log)
@@ -231,7 +243,7 @@ def render_data_source_detection(structure_file, output_dir, data_dir):
             if st.session_state.extraction_running:
                 # 2秒ごとに更新
                 time.sleep(2)
-                st.experimental_rerun()
+                st.rerun()
             
             # 完了後のメッセージ
             if st.session_state.extraction_complete:
@@ -241,7 +253,7 @@ def render_data_source_detection(structure_file, output_dir, data_dir):
                 if st.button("ダウンロード済みデータを表示", use_container_width=True):
                     # タブを切り替え
                     st.experimental_set_query_params(active_tab="ダウンロード済みデータ")
-                    st.experimental_rerun()
+                    st.rerun()
 
 
 def render_downloaded_data(data_dir):
@@ -559,11 +571,39 @@ def format_size(size_bytes):
         return f"{size_gb:.1f} GB"
 
 
-def add_log(message):
-    """ログメッセージを追加"""
+def add_extraction_log(message):
+    """
+    ログメッセージを追加
+    
+    Args:
+        message (str): ログメッセージ
+    """
     timestamp = datetime.now().strftime('%H:%M:%S')
     log_entry = f"[{timestamp}] {message}"
+    
+    if 'extraction_log' not in st.session_state:
+        st.session_state.extraction_log = []
+    
     st.session_state.extraction_log.append(log_entry)
+    
+    # コンソールにも出力
+    print(f"EXTRACTOR LOG: {log_entry}")
+
+
+def update_extraction_progress(value, step_description=""):
+    """
+    進捗状況を更新
+    
+    Args:
+        value (float): 進捗値（0～1）
+        step_description (str): 現在のステップの説明
+    """
+    st.session_state.extraction_progress = value
+    
+    # 現在のステップ情報も更新
+    if step_description:
+        st.session_state.extraction_current_step = step_description
+        print(f"EXTRACTOR PROGRESS: {int(value * 100)}% - {step_description}")
 
 
 def run_extraction_process(output_dir, data_dir):
@@ -579,21 +619,22 @@ def run_extraction_process(output_dir, data_dir):
                 selected_sources.append(st.session_state.data_sources[idx])
         
         if not selected_sources:
-            add_log("選択されたデータソースがありません")
+            add_extraction_log("選択されたデータソースがありません")
             return
         
-        add_log(f"{len(selected_sources)}個のデータソースをダウンロードします")
-        st.session_state.extraction_progress = 0.1
+        add_extraction_log(f"{len(selected_sources)}個のデータソースをダウンロードします")
+        update_extraction_progress(0.1, "環境準備完了")
         
         # ディレクトリ存在確認
         os.makedirs(data_dir, exist_ok=True)
         
         # ブラウザセットアップ
-        add_log("ブラウザを起動しています...")
+        add_extraction_log("ブラウザを起動しています...")
+        update_extraction_progress(0.15, "ブラウザ初期化中")
         login_manager = LoginManager(config)
         browser = login_manager.login()
-        add_log("ログインに成功しました")
-        st.session_state.extraction_progress = 0.2
+        add_extraction_log("ログインに成功しました")
+        update_extraction_progress(0.2, "ブラウザ準備完了")
         
         try:
             # ダウンローダーの作成
@@ -603,7 +644,7 @@ def run_extraction_process(output_dir, data_dir):
             total_sources = len(selected_sources)
             for i, source in enumerate(selected_sources):
                 if not st.session_state.extraction_running:
-                    add_log("ユーザーによりデータ抽出が中止されました")
+                    add_extraction_log("ユーザーによりデータ抽出が中止されました")
                     break
                 
                 source_type = source.get('type', '')
@@ -612,10 +653,10 @@ def run_extraction_process(output_dir, data_dir):
                 
                 # 進捗を更新
                 progress = 0.2 + (0.8 * (i / total_sources))
-                st.session_state.extraction_progress = progress
+                update_extraction_progress(progress, f"データ抽出中: {source_text[:50]}...")
                 
                 # ソースタイプに応じたダウンロード
-                add_log(f"データソース #{i+1} をダウンロード中: {source_text[:50]}...")
+                add_extraction_log(f"データソース #{i+1} をダウンロード中: {source_text[:50]}...")
                 
                 if source_type == 'link':
                     result = downloader._download_link(source)
@@ -626,26 +667,33 @@ def run_extraction_process(output_dir, data_dir):
                 elif source_type == 'api':
                     result = downloader._download_api(source)
                 else:
-                    add_log(f"不明なソースタイプ: {source_type}")
+                    add_extraction_log(f"不明なソースタイプ: {source_type}")
                     continue
                 
                 if result:
-                    add_log(f"データソース #{i+1} のダウンロードが完了しました")
+                    add_extraction_log(f"データソース #{i+1} のダウンロードが完了しました")
                 else:
-                    add_log(f"データソース #{i+1} のダウンロードに失敗しました")
+                    add_extraction_log(f"データソース #{i+1} のダウンロードに失敗しました")
             
-            add_log(f"データ抽出が完了しました。結果は {data_dir} に保存されています")
-            st.session_state.extraction_progress = 1.0
+            add_extraction_log(f"データ抽出が完了しました。結果は {data_dir} に保存されています")
+            update_extraction_progress(1.0, "抽出完了")
             
         finally:
             # ブラウザを閉じる
             if browser:
                 browser.quit()
-                add_log("ブラウザを終了しました")
+                add_extraction_log("ブラウザを終了しました")
         
     except Exception as e:
-        add_log(f"データ抽出中にエラーが発生しました: {str(e)}")
-        st.session_state.extraction_progress = 0.0
+        import traceback
+        error_details = traceback.format_exc()
+        add_extraction_log(f"エラーが発生しました: {str(e)}")
+        add_extraction_log(f"エラー詳細: {error_details}")
+        update_extraction_progress(0.0, "エラー発生")
+        
+        # エラーフラグを設定
+        st.session_state.extraction_running = False
+        st.session_state.extraction_complete = False
     
     finally:
         # 完了フラグを設定
